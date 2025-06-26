@@ -201,19 +201,62 @@ export class NetworkMonitor {
     })
   }
 
-  // Test network connectivity with actual request
+  // Test network connectivity with a simpler, more reliable approach
   async testConnectivity(): Promise<boolean> {
     try {
-      const response = await fetch(`${supabaseUrl}/rest/v1/`, {
-        method: 'HEAD',
-        headers: {
-          'apikey': supabaseAnonKey,
-          'Authorization': `Bearer ${supabaseAnonKey}`
-        },
-        signal: AbortSignal.timeout(5000)
-      })
-      return response.ok
-    } catch {
+      // First check if navigator says we're online
+      if (!navigator.onLine) {
+        return false
+      }
+
+      // Create a controller for timeout handling that works across all browsers
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 5000)
+
+      try {
+        // Use a simple GET request to a reliable endpoint
+        const response = await fetch(`${supabaseUrl}/health`, {
+          method: 'GET',
+          headers: {
+            'apikey': supabaseAnonKey
+          },
+          signal: controller.signal,
+          mode: 'cors',
+          cache: 'no-cache'
+        })
+        
+        clearTimeout(timeoutId)
+        return response.ok
+      } catch (fetchError) {
+        clearTimeout(timeoutId)
+        
+        // If the health endpoint doesn't exist, try a different approach
+        // Test with a HEAD request to the main URL
+        const headController = new AbortController()
+        const headTimeoutId = setTimeout(() => headController.abort(), 5000)
+        
+        try {
+          const headResponse = await fetch(supabaseUrl, {
+            method: 'HEAD',
+            signal: headController.signal,
+            mode: 'no-cors', // Use no-cors to avoid CORS issues
+            cache: 'no-cache'
+          })
+          
+          clearTimeout(headTimeoutId)
+          // For no-cors requests, we just check if the request completes
+          return true
+        } catch (headError) {
+          clearTimeout(headTimeoutId)
+          
+          // As a final fallback, just return false gracefully
+          console.log('Connectivity test failed, assuming offline')
+          return false
+        }
+      }
+    } catch (error) {
+      // Always return false on any error - don't let errors bubble up
+      console.log('Connectivity test error:', error)
       return false
     }
   }
