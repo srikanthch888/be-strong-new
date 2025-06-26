@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
-import { Menu, X, User, LogOut, Settings, Heart, Activity, Home, Coffee, AlertTriangle } from 'lucide-react'
+import { Menu, X, User, LogOut, Settings, Heart, Activity, Home, Coffee, AlertTriangle, Wifi } from 'lucide-react'
 import { useAuth } from '../../hooks/useAuth'
+import { useNetwork } from '../../hooks/useNetwork'
 import { AuthModal } from '../Auth/AuthModal'
 import { Badge, NotificationBadge } from '../UI/Badge'
 
@@ -10,7 +11,8 @@ interface NavbarProps {
 }
 
 export function Navbar({ currentPage, onNavigate }: NavbarProps) {
-  const { user, profile, signOut, signOutLoading, lastSignOutAttempt } = useAuth()
+  const { user, profile, signOut, signOutLoading, lastSignOutAttempt, connectionError } = useAuth()
+  const { status: networkStatus } = useNetwork()
   const [showAuthModal, setShowAuthModal] = useState(false)
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login')
   const [showMobileMenu, setShowMobileMenu] = useState(false)
@@ -101,6 +103,20 @@ export function Navbar({ currentPage, onNavigate }: NavbarProps) {
                 <Activity className="w-6 h-6 text-white" />
               </div>
               <span className="text-xl font-bold text-gray-900">BE STRONG</span>
+              
+              {/* Network Status Indicator */}
+              {networkStatus !== 'connected' && (
+                <div className="flex items-center space-x-1">
+                  <Wifi className={`w-4 h-4 ${
+                    networkStatus === 'offline' ? 'text-red-500' : 'text-yellow-500'
+                  }`} />
+                  <span className={`text-xs ${
+                    networkStatus === 'offline' ? 'text-red-500' : 'text-yellow-500'
+                  }`}>
+                    {networkStatus === 'offline' ? 'Offline' : 'Limited'}
+                  </span>
+                </div>
+              )}
             </div>
 
             {/* Desktop Navigation */}
@@ -185,6 +201,16 @@ export function Navbar({ currentPage, onNavigate }: NavbarProps) {
 
                   {showUserMenu && (
                     <div className="absolute right-0 mt-2 w-64 bg-white rounded-xl shadow-lg border border-gray-200 py-2 z-50">
+                      {/* Connection Error Indicator */}
+                      {connectionError && (
+                        <div className="mx-4 mb-2 p-2 bg-red-50 border border-red-200 rounded-lg">
+                          <div className="flex items-center space-x-2 text-xs text-red-800">
+                            <AlertTriangle className="w-3 h-3" />
+                            <span>Connection issues detected</span>
+                          </div>
+                        </div>
+                      )}
+
                       {/* Sign-out Status Indicator */}
                       {lastSignOutAttempt && !lastSignOutAttempt.success && (
                         <div className="mx-4 mb-2 p-2 bg-yellow-50 border border-yellow-200 rounded-lg">
@@ -307,6 +333,18 @@ export function Navbar({ currentPage, onNavigate }: NavbarProps) {
           {showMobileMenu && (
             <div className="md:hidden border-t border-gray-200 py-4 bg-white relative z-40">
               <div className="flex flex-col space-y-1">
+                {/* Connection Status for Mobile */}
+                {(connectionError || networkStatus !== 'connected') && (
+                  <div className="mx-4 mb-4 p-3 bg-red-50 border border-red-200 rounded-lg">
+                    <div className="flex items-center space-x-2 text-sm text-red-800">
+                      <AlertTriangle className="w-4 h-4" />
+                      <span>
+                        {connectionError || `Network: ${networkStatus}`}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
                 {navItems.map((item) => (
                   <Badge
                     key={item.id}
