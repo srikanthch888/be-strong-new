@@ -1,192 +1,172 @@
-export async function diagnoseSupabaseConnectivity(): Promise<{
-  status: 'success' | 'dns_error' | 'network_error' | 'config_error'
+import { supabase } from '../lib/supabase'
+
+export interface DiagnosticResult {
+  test: string
+  success: boolean
   message: string
-  details: any
-}> {
-  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
-  const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY
-  
-  console.log('🔍 Starting Supabase connectivity diagnosis...')
-  
-  // Check 1: Environment configuration
-  if (!supabaseUrl || !supabaseKey) {
-    return {
-      status: 'config_error',
-      message: 'Missing Supabase environment variables',
+  details?: any
+  timestamp: string
+}
+
+export async function diagnoseSupabaseConnectivity(): Promise<DiagnosticResult[]> {
+  const results: DiagnosticResult[] = []
+  const timestamp = new Date().toISOString()
+
+  // Test 1: Environment Variables
+  try {
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
+    const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY
+    
+    results.push({
+      test: 'Environment Variables',
+      success: !!(supabaseUrl && supabaseKey),
+      message: supabaseUrl && supabaseKey 
+        ? 'Supabase URL and API key are configured'
+        : 'Missing Supabase URL or API key in environment variables',
       details: {
         hasUrl: !!supabaseUrl,
         hasKey: !!supabaseKey,
-        urlValue: supabaseUrl ? supabaseUrl.substring(0, 20) + '...' : null
-      }
-    }
-  }
-  
-  // Check 2: URL format validation
-  try {
-    const url = new URL(supabaseUrl)
-    if (!url.hostname.includes('supabase.co')) {
-      return {
-        status: 'config_error',
-        message: 'Invalid Supabase URL format',
-        details: { hostname: url.hostname }
-      }
-    }
-  } catch (error) {
-    return {
-      status: 'config_error',
-      message: 'Malformed Supabase URL',
-      details: { url: supabaseUrl, error: error.message }
-    }
-  }
-  
-  // Check 3: Network connectivity
-  if (!navigator.onLine) {
-    return {
-      status: 'network_error',
-      message: 'No internet connection',
-      details: { navigator_online: false }
-    }
-  }
-  
-  // Check 4: DNS resolution test
-  try {
-    console.log('Testing DNS resolution for:', supabaseUrl)
-    
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 10000) // 10 second timeout
-    
-    const response = await fetch(supabaseUrl, {
-      method: 'HEAD',
-      signal: controller.signal
+        urlPreview: supabaseUrl ? `${supabaseUrl.substring(0, 30)}...` : 'Not set'
+      },
+      timestamp
     })
-    
-    clearTimeout(timeout)
-    
-    console.log('✅ DNS resolution successful:', response.status)
-    
-    return {
-      status: 'success',
-      message: 'Supabase connectivity confirmed',
-      details: {
-        status: response.status,
-        url: supabaseUrl,
-        timestamp: new Date().toISOString()
-      }
-    }
-    
   } catch (error: any) {
-    console.error('❌ Connectivity test failed:', error)
-    
-    if (error.name === 'AbortError') {
-      return {
-        status: 'network_error',
-        message: 'Connection timeout',
-        details: { error: 'Request timed out after 10 seconds' }
-      }
-    }
-    
-    if (error.message.includes('ERR_NAME_NOT_RESOLVED')) {
-      return {
-        status: 'dns_error',
-        message: 'DNS resolution failed - cannot find Supabase server',
-        details: {
-          error: error.message,
-          possibleCauses: [
-            'Supabase project is paused or deleted',
-            'Incorrect project URL in environment variables',
-            'DNS cache needs clearing',
-            'Network firewall blocking supabase.co domain',
-            'ISP DNS issues'
-          ],
-          solutions: [
-            'Check Supabase dashboard project status',
-            'Verify VITE_SUPABASE_URL in .env file',
-            'Clear DNS cache and restart browser',
-            'Try different network (mobile hotspot)',
-            'Contact network administrator if on corporate network'
-          ]
-        }
-      }
-    }
-    
-    if (error.message.includes('Failed to fetch')) {
-      return {
-        status: 'network_error',
-        message: 'Network request failed',
-        details: {
-          error: error.message,
-          possibleCauses: [
-            'Firewall blocking requests',
-            'Proxy configuration issues',
-            'Antivirus software interference',
-            'Network connectivity problems'
-          ]
-        }
-      }
-    }
-    
-    return {
-      status: 'network_error',
-      message: 'Unknown connectivity error',
-      details: { error: error.message }
-    }
+    results.push({
+      test: 'Environment Variables',
+      success: false,
+      message: `Error checking environment variables: ${error.message}`,
+      timestamp
+    })
   }
+
+  // Test 2: Basic Connectivity
+  try {
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
+    if (!supabaseUrl) {
+      results.push({
+        test: 'Basic Connectivity',
+        success: false,
+        message: 'Cannot test connectivity - Supabase URL not configured',
+        timestamp
+      })
+    } else {
+      // Wrap fetch in try-catch to handle network errors gracefully
+      try {
+        const response = await fetch(`${supabaseUrl}/rest/v1/`, {
+          method: 'HEAD',
+          headers: {
+            'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY || '',
+            'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY || ''}`
+          }
+        })
+        
+        results.push({
+          test: 'Basic Connectivity',
+          success: response.ok,
+          message: response.ok 
+            ? `Successfully connected to Supabase (${response.status})`
+            : `Connection failed with status ${response.status}`,
+          details: {
+            status: response.status,
+            statusText: response.statusText,
+            url: `${supabaseUrl}/rest/v1/`
+          },
+          timestamp
+        })
+      } catch (fetchError: any) {
+        // Handle fetch errors gracefully - this is where the original error was occurring
+        results.push({
+          test: 'Basic Connectivity',
+          success: false,
+          message: `Network connectivity test failed: ${fetchError.message}`,
+          details: {
+            errorType: fetchError.name,
+            errorMessage: fetchError.message,
+            url: `${supabaseUrl}/rest/v1/`,
+            possibleCauses: [
+              'DNS resolution failure (ERR_NAME_NOT_RESOLVED)',
+              'Network firewall blocking Supabase domains',
+              'Supabase project paused or deleted',
+              'Local network restrictions',
+              'Invalid Supabase URL configuration'
+            ]
+          },
+          timestamp
+        })
+      }
+    }
+  } catch (error: any) {
+    results.push({
+      test: 'Basic Connectivity',
+      success: false,
+      message: `Connectivity test error: ${error.message}`,
+      timestamp
+    })
+  }
+
+  // Test 3: Supabase Client Status
+  try {
+    const { data, error } = await supabase.auth.getSession()
+    
+    results.push({
+      test: 'Supabase Client',
+      success: !error,
+      message: error 
+        ? `Supabase client error: ${error.message}`
+        : 'Supabase client initialized successfully',
+      details: {
+        hasSession: !!data.session,
+        clientConfigured: !!supabase,
+        sessionUser: data.session?.user?.id
+      },
+      timestamp
+    })
+  } catch (error: any) {
+    results.push({
+      test: 'Supabase Client',
+      success: false,
+      message: `Supabase client test failed: ${error.message}`,
+      timestamp
+    })
+  }
+
+  return results
 }
 
-export async function validateSupabaseProject(): Promise<{
-  valid: boolean
-  message: string
-  suggestions: string[]
-}> {
+export async function testSupabaseEndpoint(tableName: string): Promise<DiagnosticResult> {
+  const timestamp = new Date().toISOString()
+  
   try {
-    const diagnosis = await diagnoseSupabaseConnectivity()
-    
-    if (diagnosis.status === 'success') {
-      return {
-        valid: true,
-        message: 'Supabase project is accessible',
-        suggestions: []
-      }
-    }
-    
-    const suggestions: string[] = []
-    
-    switch (diagnosis.status) {
-      case 'dns_error':
-        suggestions.push(
-          'Check your Supabase project dashboard',
-          'Verify the project URL in your .env file',
-          'Clear your DNS cache',
-          'Try accessing from a different network'
-        )
-        break
-      case 'network_error':
-        suggestions.push(
-          'Check your internet connection',
-          'Disable firewall/antivirus temporarily',
-          'Try using a VPN or different DNS servers',
-          'Contact your network administrator'
-        )
-        break
-      case 'config_error':
-        suggestions.push(
-          'Check your .env file for VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY',
-          'Ensure the URL format is correct: https://[project-id].supabase.co',
-          'Restart your development server after updating .env'
-        )
-        break
-    }
-    
+    const { data, error, count } = await supabase
+      .from(tableName)
+      .select('*', { count: 'exact', head: true })
+      .limit(1)
+
     return {
-      valid: false,
-      message: diagnosis.message,
-      suggestions
+      test: `Table Access: ${tableName}`,
+      success: !error,
+      message: error 
+        ? `Failed to access ${tableName}: ${error.message}`
+        : `Successfully accessed ${tableName} table`,
+      details: {
+        tableName,
+        error: error?.message,
+        recordCount: count,
+        hasData: (count || 0) > 0
+      },
+      timestamp
     }
   } catch (error: any) {
     return {
-      valid: false,
-      message: 'Failed to validate Supabase project',
-      suggestions: ['Check console for detailed error information']
+      test: `Table Access: ${tableName}`,
+      success: false,
+      message: `Error testing ${tableName}: ${error.message}`,
+      details: {
+        tableName,
+        errorType: error.name,
+        errorMessage: error.message
+      },
+      timestamp
     }
   }
 }
