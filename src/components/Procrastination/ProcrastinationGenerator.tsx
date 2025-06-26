@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import { Save, Check, AlertCircle } from 'lucide-react'
 import { useAuth } from '../../hooks/useAuth'
-import { supabase, ProcrastinationStep } from '../../lib/supabase'
+import { ProcrastinationStep, database, SupabaseError } from '../../lib/supabase'
 import { CorporateDetourHeader } from './CorporateDetourHeader'
 import { ProcrastinationStepCard } from './ProcrastinationStepCard'
 import { CorporateLoadingSpinner } from './CorporateLoadingSpinner'
@@ -118,21 +118,37 @@ export function ProcrastinationGenerator() {
     setSaveMessage('')
 
     try {
-      const { error } = await supabase
-        .from('saved_procrastination_routes')
-        .insert({
-          user_id: user.id,
-          original_task: task.trim(),
-          route_steps: generatedRoute
-        })
+      const { error } = await database.saveProcrastinationRoute(
+        user.id,
+        task.trim(),
+        generatedRoute
+      )
 
-      if (error) throw error
+      if (error) {
+        throw error
+      }
 
       setIsRouteSaved(true)
       setSaveMessage('Route saved successfully! Your procrastination strategy is now preserved for posterity.')
     } catch (error: any) {
       console.error('Error saving route:', error)
-      setSaveMessage('Failed to save route. Even our procrastination system is procrastinating.')
+      
+      let errorMessage = 'Failed to save route. Even our procrastination system is procrastinating.'
+      
+      if (error instanceof SupabaseError) {
+        switch (error.code) {
+          case 'PERMISSION_ERROR':
+            errorMessage = 'Permission denied. Please check your account access.'
+            break
+          case 'NETWORK_ERROR':
+            errorMessage = 'Network error. Please check your connection and try again.'
+            break
+          default:
+            errorMessage = error.message
+        }
+      }
+      
+      setSaveMessage(errorMessage)
     } finally {
       setIsSaving(false)
     }

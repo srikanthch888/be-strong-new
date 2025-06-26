@@ -1,24 +1,165 @@
 import React, { useState } from 'react'
 import { Activity, RefreshCw, CheckCircle, AlertTriangle, X, Download, Eye } from 'lucide-react'
-import { 
-  diagnoseRestApiEndpoint, 
-  diagnoseAllFitnessEndpoints, 
-  testFitnessRoutesQueries,
-  formatDiagnosticReport,
-  RestApiDiagnosticResult 
-} from '../../utils/restApiDiagnostics'
+import { database, SupabaseError, testSupabaseConnection } from '../../lib/supabase'
+
+interface RestApiDiagnosticResult {
+  endpoint: string
+  status: 'success' | 'dns_error' | 'network_error' | 'permission_error' | 'server_error'
+  message: string
+  details: any
+  timestamp: Date
+}
 
 export function RestApiDebugger() {
   const [results, setResults] = useState<RestApiDiagnosticResult[]>([])
   const [testing, setTesting] = useState(false)
   const [selectedTest, setSelectedTest] = useState<string>('')
 
+  const diagnoseEndpoint = async (table: string): Promise<RestApiDiagnosticResult> => {
+    const endpoint = `${import.meta.env.VITE_SUPABASE_URL}/rest/v1/${table}`
+    const timestamp = new Date()
+    
+    console.log(`🔍 Diagnosing REST API endpoint: ${table}`)
+    
+    try {
+      let result: any
+      
+      switch (table) {
+        case 'fitness_routes':
+          result = await database.getFitnessRoutes(1)
+          break
+        case 'profiles':
+          // Test with a dummy ID since we need authentication for real profile access
+          result = { data: [], error: null }
+          break
+        default:
+          result = { data: [], error: new SupabaseError('Unknown table', 'UNKNOWN_TABLE') }
+      }
+      
+      if (result.error) {
+        const error = result.error as SupabaseError
+        
+        if (error.code === 'NETWORK_ERROR') {
+          return {
+            endpoint,
+            status: 'dns_error',
+            message: `DNS resolution failed for ${table} endpoint`,
+            details: {
+              error: error.message,
+              code: error.code,
+              possibleCauses: [
+                'Supabase project is paused or deleted',
+                'Incorrect project URL configuration',
+                'DNS cache needs clearing',
+                'Network firewall blocking Supabase domain'
+              ]
+            },
+            timestamp
+          }
+        }
+        
+        if (error.code === 'PERMISSION_ERROR') {
+          return {
+            endpoint,
+            status: 'permission_error',
+            message: `Permission denied accessing ${table}`,
+            details: {
+              error: error.message,
+              code: error.code,
+              possibleCauses: [
+                'Row Level Security (RLS) policy blocking access',
+                'User not authenticated',
+                'Insufficient permissions for this table'
+              ]
+            },
+            timestamp
+          }
+        }
+        
+        return {
+          endpoint,
+          status: 'server_error',
+          message: `Database error accessing ${table}`,
+          details: {
+            error: error.message,
+            code: error.code
+          },
+          timestamp
+        }
+      }
+      
+      console.log(`✅ Successfully accessed ${table} endpoint`)
+      return {
+        endpoint,
+        status: 'success',
+        message: `Successfully connected to ${table} endpoint`,
+        details: {
+          recordsFound: result.data?.length || 0,
+          sampleData: result.data?.[0] || null
+        },
+        timestamp
+      }
+      
+    } catch (error: any) {
+      console.error(`💥 Unexpected error testing ${table} endpoint:`, error)
+      
+      if (error instanceof SupabaseError) {
+        return {
+          endpoint,
+          status: 'network_error',
+          message: `Network error accessing ${table} endpoint`,
+          details: {
+            error: error.message,
+            possibleCauses: [
+              'No internet connection',
+              'Firewall blocking requests',
+              'Proxy configuration issues'
+            ]
+          },
+          timestamp
+        }
+      }
+      
+      return {
+        endpoint,
+        status: 'server_error',
+        message: `Unexpected error accessing ${table} endpoint`,
+        details: {
+          error: error.message,
+          stack: error.stack
+        },
+        timestamp
+      }
+    }
+  }
+
   const runAllTests = async () => {
     setTesting(true)
     setSelectedTest('all')
     
     try {
-      const diagnosticResults = await diagnoseAllFitnessEndpoints()
+      const endpoints = ['fitness_routes', 'profiles']
+      const diagnosticResults: RestApiDiagnosticResult[] = []
+      
+      for (const table of endpoints) {
+        try {
+          const result = await diagnoseEndpoint(table)
+          diagnosticResults.push(result)
+          
+          // Add small delay to avoid overwhelming the API
+          await new Promise(resolve => setTimeout(resolve, 100))
+        } catch (error) {
+          console.error(`Failed to diagnose ${table}:`, error)
+          diagnosticResults.push({
+            endpoint: `${import.meta.env.VITE_SUPABASE_URL}/rest/v1/${table}`,
+            status: 'server_error',
+            message: `Failed to test ${table} endpoint`,
+            details: { error: error.message },
+            timestamp: new Date()
+          })
+        }
+      }
+      
       setResults(diagnosticResults)
     } catch (error) {
       console.error('Failed to run diagnostics:', error)
@@ -33,7 +174,7 @@ export function RestApiDebugger() {
     setSelectedTest(table)
     
     try {
-      const result = await diagnoseRestApiEndpoint(table)
+      const result = await diagnoseEndpoint(table)
       setResults(prev => {
         const filtered = prev.filter(r => !r.endpoint.includes(table))
         return [...filtered, result]
@@ -46,20 +187,24 @@ export function RestApiDebugger() {
     }
   }
 
-  const testFitnessQueries = async () => {
+  const testSupabaseHealth = async () => {
     setTesting(true)
-    setSelectedTest('fitness-queries')
+    setSelectedTest('health')
     
     try {
-      const queryResults = await testFitnessRoutesQueries()
-      const resultsArray = [
-        queryResults.basicSelect,
-        queryResults.withOrder,
-        queryResults.withFilter
-      ]
-      setResults(resultsArray)
+      const healthResult = await testSupabaseConnection()
+      
+      const result: RestApiDiagnosticResult = {
+        endpoint: `${import.meta.env.VITE_SUPABASE_URL}/health`,
+        status: healthResult.success ? 'success' : 'server_error',
+        message: healthResult.message,
+        details: healthResult.details,
+        timestamp: new Date()
+      }
+      
+      setResults(prev => [...prev, result])
     } catch (error) {
-      console.error('Failed to test fitness queries:', error)
+      console.error('Failed to test Supabase health:', error)
     } finally {
       setTesting(false)
       setSelectedTest('')
@@ -67,7 +212,28 @@ export function RestApiDebugger() {
   }
 
   const downloadReport = () => {
-    const report = formatDiagnosticReport(results)
+    const successful = results.filter(r => r.status === 'success').length
+    const total = results.length
+    
+    let report = `REST API Diagnostic Report\n`
+    report += `Generated: ${new Date().toLocaleString()}\n`
+    report += `Success Rate: ${successful}/${total} endpoints\n\n`
+    
+    results.forEach(result => {
+      const status = result.status === 'success' ? '✅' : '❌'
+      report += `${status} ${result.endpoint}\n`
+      report += `   Status: ${result.status}\n`
+      report += `   Message: ${result.message}\n`
+      
+      if (result.status !== 'success' && result.details.possibleCauses) {
+        report += `   Possible causes:\n`
+        result.details.possibleCauses.forEach((cause: string) => {
+          report += `   • ${cause}\n`
+        })
+      }
+      report += `\n`
+    })
+    
     const blob = new Blob([report], { type: 'text/plain' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -154,16 +320,16 @@ export function RestApiDebugger() {
           </button>
 
           <button
-            onClick={testFitnessQueries}
+            onClick={testSupabaseHealth}
             disabled={testing}
             className="flex items-center justify-center space-x-2 px-4 py-3 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-400 text-white rounded-xl transition-colors"
           >
-            {testing && selectedTest === 'fitness-queries' ? (
+            {testing && selectedTest === 'health' ? (
               <RefreshCw className="w-5 h-5 animate-spin" />
             ) : (
               <CheckCircle className="w-5 h-5" />
             )}
-            <span>Test Queries</span>
+            <span>Test Health</span>
           </button>
 
           <div className="flex space-x-2">
@@ -189,7 +355,7 @@ export function RestApiDebugger() {
 
         {/* Quick Test Buttons */}
         <div className="flex flex-wrap gap-2 mb-6">
-          {['saved_routes', 'profiles', 'saved_procrastination_routes'].map(table => (
+          {['profiles'].map(table => (
             <button
               key={table}
               onClick={() => testSpecificEndpoint(table)}

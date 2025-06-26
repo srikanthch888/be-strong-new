@@ -5,7 +5,7 @@ import {
   ChevronLeft, ChevronRight, Check
 } from 'lucide-react'
 import { useAuth } from '../../hooks/useAuth'
-import { supabase, SavedProcrastinationRoute, ProcrastinationStep } from '../../lib/supabase'
+import { SavedProcrastinationRoute, ProcrastinationStep, database, SupabaseError } from '../../lib/supabase'
 
 type SortOption = 'date' | 'title' | 'status' | 'alphabetical'
 type FilterOption = 'all' | 'active' | 'completed' | 'archived'
@@ -36,13 +36,10 @@ function RouteDetailModal({ route, isOpen, onClose, onUpdate, onDelete }: RouteM
   const handleSave = async () => {
     setLoading(true)
     try {
-      const { error } = await supabase
-        .from('saved_procrastination_routes')
-        .update({
-          title: editTitle.trim() || null,
-          notes: editNotes.trim()
-        })
-        .eq('id', route.id)
+      const { error } = await database.updateProcrastinationRoute(route.id, {
+        title: editTitle.trim() || null,
+        notes: editNotes.trim()
+      })
 
       if (error) throw error
 
@@ -70,10 +67,7 @@ function RouteDetailModal({ route, isOpen, onClose, onUpdate, onDelete }: RouteM
     }
 
     try {
-      const { error } = await supabase
-        .from('saved_procrastination_routes')
-        .update(updates)
-        .eq('id', route.id)
+      const { error } = await database.updateProcrastinationRoute(route.id, updates)
 
       if (error) throw error
 
@@ -320,18 +314,27 @@ export function SavedProcrastinationRoutes() {
     if (!user) return
 
     try {
-      const { data, error } = await supabase
-        .from('saved_procrastination_routes')
-        .select('*')
-        .eq('user_id', user.id)
-        .eq('is_active', true)
-        .order('created_at', { ascending: false })
+      const { data, error } = await database.getUserProcrastinationRoutes(user.id)
 
       if (error) throw error
       setSavedRoutes(data || [])
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching saved routes:', error)
-      setMessage('Failed to load saved routes.')
+      
+      let errorMessage = 'Failed to load saved routes.'
+      if (error instanceof SupabaseError) {
+        switch (error.code) {
+          case 'NETWORK_ERROR':
+            errorMessage = 'Network error. Please check your connection.'
+            break
+          case 'PERMISSION_ERROR':
+            errorMessage = 'Access denied. Please check your account permissions.'
+            break
+          default:
+            errorMessage = error.message
+        }
+      }
+      setMessage(errorMessage)
     } finally {
       setLoading(false)
     }
@@ -383,10 +386,7 @@ export function SavedProcrastinationRoutes() {
 
     setDeleteLoading(routeId)
     try {
-      const { error } = await supabase
-        .from('saved_procrastination_routes')
-        .update({ is_active: false })
-        .eq('id', routeId)
+      const { error } = await database.deleteProcrastinationRoute(routeId)
 
       if (error) throw error
 
@@ -397,9 +397,14 @@ export function SavedProcrastinationRoutes() {
         return newSet
       })
       setMessage('Route deleted successfully.')
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error deleting route:', error)
-      setMessage('Failed to delete route.')
+      
+      let errorMessage = 'Failed to delete route.'
+      if (error instanceof SupabaseError) {
+        errorMessage = error.message
+      }
+      setMessage(errorMessage)
     } finally {
       setDeleteLoading(null)
     }
@@ -413,17 +418,24 @@ export function SavedProcrastinationRoutes() {
     }
 
     try {
-      const { error } = await supabase
-        .from('saved_procrastination_routes')
-        .update({ is_active: false })
-        .in('id', Array.from(selectedRoutes))
-
-      if (error) throw error
+      const deletePromises = Array.from(selectedRoutes).map(routeId => 
+        database.deleteProcrastinationRoute(routeId)
+      )
+      
+      const results = await Promise.allSettled(deletePromises)
+      const failedDeletes = results.filter(result => result.status === 'rejected')
+      
+      if (failedDeletes.length > 0) {
+        console.error('Some deletes failed:', failedDeletes)
+        setMessage(`${selectedRoutes.size - failedDeletes.length} routes deleted, ${failedDeletes.length} failed.`)
+      } else {
+        setMessage(`${selectedRoutes.size} routes deleted successfully.`)
+      }
 
       setSavedRoutes(prev => prev.filter(route => !selectedRoutes.has(route.id)))
       setSelectedRoutes(new Set())
-      setMessage(`${selectedRoutes.size} routes deleted successfully.`)
-    } catch (error) {
+      
+    } catch (error: any) {
       console.error('Error bulk deleting routes:', error)
       setMessage('Failed to delete selected routes.')
     }

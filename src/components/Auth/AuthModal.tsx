@@ -78,9 +78,10 @@ export function AuthModal({ isOpen, onClose, initialMode = 'login' }: AuthModalP
       if (mode === 'login') {
         const { error } = await signIn(data.email, data.password)
         if (error) {
-          // Enhanced error handling for DNS issues
+          // Enhanced error handling for connection issues
           if (error.message?.includes('Failed to fetch') || 
-              error.message?.includes('ERR_NAME_NOT_RESOLVED')) {
+              error.message?.includes('ERR_NAME_NOT_RESOLVED') ||
+              error.message?.includes('Network Error')) {
             setError('Cannot connect to authentication service. This might be due to:\n• Network connectivity issues\n• Supabase service unavailable\n• DNS resolution problems\n\nPlease check your connection and try again.')
           } else {
             setError(error.message)
@@ -173,11 +174,11 @@ export function AuthModal({ isOpen, onClose, initialMode = 'login' }: AuthModalP
                   <p className="text-sm text-red-700 mb-3">
                     Cannot connect to the authentication service. This may prevent signing in.
                   </p>
-                  {connectionStatus.details?.details?.solutions && (
+                  {connectionStatus.details?.solutions && (
                     <div className="text-xs text-red-600">
                       <strong>Try:</strong>
                       <ul className="list-disc list-inside mt-1 space-y-1">
-                        {connectionStatus.details.details.solutions.slice(0, 3).map((solution: string, index: number) => (
+                        {connectionStatus.details.solutions.slice(0, 3).map((solution: string, index: number) => (
                           <li key={index}>{solution}</li>
                         ))}
                       </ul>
