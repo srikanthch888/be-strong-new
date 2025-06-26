@@ -9,6 +9,7 @@ import { SavedProcrastinationRoutes } from './components/Procrastination/SavedPr
 import { BadgeExamples } from './components/UI/BadgeExamples'
 import { SignOutDebugger } from './components/Debug/SignOutDebugger'
 import { AuthCleaner } from './components/Auth/AuthCleaner'
+import { RestApiDebugger } from './components/Debug/RestApiDebugger'
 import { AuthModal } from './components/Auth/AuthModal'
 import { NetworkStatus } from './components/UI/NetworkStatus'
 import { ErrorBoundary } from './components/UI/ErrorBoundary'
@@ -44,6 +45,8 @@ function App() {
         return <SignOutDebugger />
       case 'auth-cleaner':
         return <AuthCleaner />
+      case 'debug-rest-api':
+        return <RestApiDebugger />
       default:
         return <HomePage onNavigate={handleNavigate} />
     }
@@ -86,6 +89,12 @@ function App() {
                 className="block px-3 py-2 bg-red-600 hover:bg-red-700 text-white text-xs rounded-lg shadow-lg"
               >
                 Clear Auth Data
+              </button>
+              <button
+                onClick={() => handleNavigate('debug-rest-api')}
+                className="block px-3 py-2 bg-green-600 hover:bg-green-700 text-white text-xs rounded-lg shadow-lg"
+              >
+                Debug REST API
               </button>
               <div className="bg-white p-2 rounded-lg shadow-lg">
                 <NetworkStatus showDetails />
