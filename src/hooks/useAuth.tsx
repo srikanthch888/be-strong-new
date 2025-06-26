@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState } from 'react'
 import { User, Session, AuthError } from '@supabase/supabase-js'
-import { supabase, Profile, supabaseErrorHandler, NetworkError } from '../lib/supabase'
+import { supabase, Profile, database, SupabaseError } from '../lib/supabase'
 
 interface AuthContextType {
   user: User | null
@@ -8,9 +8,9 @@ interface AuthContextType {
   session: Session | null
   loading: boolean
   signOut: () => Promise<{ success: boolean; error?: string; stage?: string }>
-  signUp: (email: string, password: string, userData?: any) => Promise<{ error: AuthError | null }>
-  signIn: (email: string, password: string) => Promise<{ error: AuthError | null }>
-  resetPassword: (email: string) => Promise<{ error: AuthError | null }>
+  signUp: (email: string, password: string, userData?: any) => Promise<{ error: AuthError | SupabaseError | null }>
+  signIn: (email: string, password: string) => Promise<{ error: AuthError | SupabaseError | null }>
+  resetPassword: (email: string) => Promise<{ error: AuthError | SupabaseError | null }>
   updateProfile: (updates: Partial<Profile>) => Promise<{ error: any }>
   signOutLoading: boolean
   lastSignOutAttempt: { timestamp: string; success: boolean; stage: string; error?: string } | null
@@ -34,43 +34,50 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   } | null>(null)
 
   useEffect(() => {
-    // Get initial session with error handling
+    let mounted = true
+
+    // Get initial session with enhanced error handling
     const initializeAuth = async () => {
       try {
+        console.log('🔐 Initializing authentication...')
         setConnectionError(null)
+        
         const { data: { session }, error } = await supabase.auth.getSession()
         
+        if (!mounted) return
+
         if (error) {
           console.error('Auth initialization error:', error)
-          supabaseErrorHandler.logError(error, 'auth-initialization')
           setConnectionError('Failed to initialize authentication')
-        } else {
-          console.log('🔐 Initial session check:', session ? 'Session found' : 'No session')
-          setSession(session)
-          setUser(session?.user ?? null)
-          if (session?.user) {
-            await fetchProfile(session.user.id)
-          }
+          setLoading(false)
+          return
         }
-      } catch (error) {
-        console.error('Auth initialization failed:', error)
-        supabaseErrorHandler.logError(error, 'auth-initialization')
+
+        console.log('🔐 Initial session:', session ? 'Found' : 'None')
+        setSession(session)
+        setUser(session?.user ?? null)
         
-        if (error instanceof NetworkError) {
-          setConnectionError(`Connection error: ${error.message}`)
-        } else {
-          setConnectionError('Failed to connect to authentication service')
+        if (session?.user) {
+          await fetchProfile(session.user.id)
         }
-      } finally {
+        
         setLoading(false)
+      } catch (error: any) {
+        console.error('Auth initialization failed:', error)
+        if (mounted) {
+          setConnectionError('Authentication initialization failed')
+          setLoading(false)
+        }
       }
     }
 
     initializeAuth()
 
-    // Listen for auth changes with error handling
+    // Listen for auth changes with enhanced error handling
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
+        if (!mounted) return
+
         try {
           console.log(`🔐 Auth Event: ${event}`, {
             hasSession: !!session,
@@ -87,48 +94,55 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           } else {
             setProfile(null)
           }
+          
           setLoading(false)
 
           // Log specific sign-out event
           if (event === 'SIGNED_OUT') {
             console.log('✅ User successfully signed out via auth state change')
+            // Clear any cached data
+            setProfile(null)
           }
-        } catch (error) {
+        } catch (error: any) {
           console.error('Auth state change error:', error)
-          supabaseErrorHandler.logError(error, 'auth-state-change')
-          setLoading(false)
+          if (mounted) {
+            setLoading(false)
+          }
         }
       }
     )
 
-    return () => subscription.unsubscribe()
+    return () => {
+      mounted = false
+      subscription.unsubscribe()
+    }
   }, [])
 
   const fetchProfile = async (userId: string) => {
     try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', userId)
-        .single()
+      console.log(`👤 Fetching profile for user: ${userId}`)
+      
+      const { data, error } = await database.getProfile(userId)
 
       if (error) {
-        console.warn('Profile fetch error (this is normal for new users):', error)
-        supabaseErrorHandler.logError(error, 'profile-fetch')
+        console.warn('Profile fetch error (normal for new users):', error.message)
         setProfile(null)
         return
       }
+      
+      console.log('✅ Profile loaded successfully')
       setProfile(data)
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching profile:', error)
-      supabaseErrorHandler.logError(error, 'profile-fetch')
       setProfile(null)
     }
   }
 
   const signUp = async (email: string, password: string, userData?: any) => {
     try {
+      console.log('📝 Starting user registration...')
       setConnectionError(null)
+      
       const { error } = await supabase.auth.signUp({
         email,
         password,
@@ -138,32 +152,38 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       })
       
       if (error) {
-        supabaseErrorHandler.logError(error, 'signup')
+        console.error('Registration error:', error)
+        return { error }
       }
       
-      return { error }
-    } catch (error) {
-      supabaseErrorHandler.logError(error, 'signup')
-      return { error: error as AuthError }
+      console.log('✅ Registration successful')
+      return { error: null }
+    } catch (error: any) {
+      console.error('Registration failed:', error)
+      return { error: new SupabaseError(error.message, 'SIGNUP_ERROR') }
     }
   }
 
   const signIn = async (email: string, password: string) => {
     try {
+      console.log('🔑 Starting user sign-in...')
       setConnectionError(null)
+      
       const { error } = await supabase.auth.signInWithPassword({
         email,
         password
       })
       
       if (error) {
-        supabaseErrorHandler.logError(error, 'signin')
+        console.error('Sign-in error:', error)
+        return { error }
       }
       
-      return { error }
-    } catch (error) {
-      supabaseErrorHandler.logError(error, 'signin')
-      return { error: error as AuthError }
+      console.log('✅ Sign-in successful')
+      return { error: null }
+    } catch (error: any) {
+      console.error('Sign-in failed:', error)
+      return { error: new SupabaseError(error.message, 'SIGNIN_ERROR') }
     }
   }
 
@@ -176,14 +196,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setConnectionError(null)
     
     try {
-      // Step 1: Clear local state immediately
+      // Step 1: Clear local state immediately for better UX
       console.log('🧹 Step 1: Clearing local state')
       setUser(null)
       setSession(null)
       setProfile(null)
 
-      // Step 2: Clear storage
-      console.log('🗄️ Step 2: Clearing storage')
+      // Step 2: Clear browser storage
+      console.log('🗄️ Step 2: Clearing browser storage')
       try {
         const authKeys = Object.keys(localStorage).filter(key => 
           key.includes('supabase.auth') || 
@@ -194,27 +214,39 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           localStorage.removeItem(key)
           console.log(`🗑️ Cleared storage key: ${key}`)
         })
+
+        // Clear session storage too
+        const sessionKeys = Object.keys(sessionStorage).filter(key =>
+          key.includes('supabase') || key.includes('auth')
+        )
+        sessionKeys.forEach(key => sessionStorage.removeItem(key))
+        
       } catch (storageError) {
         console.warn('⚠️ Storage cleanup warning:', storageError)
       }
 
-      // Step 3: Call Supabase signOut with enhanced error handling
+      // Step 3: Call Supabase signOut with timeout
       console.log('📡 Step 3: Calling Supabase auth.signOut()')
       
       try {
-        const { error } = await supabase.auth.signOut()
+        const signOutPromise = supabase.auth.signOut()
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Sign-out timeout')), 10000)
+        )
+
+        const { error } = await Promise.race([signOutPromise, timeoutPromise]) as any
         
         if (error) {
           console.warn('⚠️ Supabase sign-out returned error:', error)
-          supabaseErrorHandler.logError(error, 'signout-api')
         } else {
           console.log('✅ Supabase sign-out API call successful')
         }
       } catch (apiError: any) {
-        console.warn('⚠️ Supabase sign-out API failed:', apiError)
-        supabaseErrorHandler.logError(apiError, 'signout-api')
+        console.warn('⚠️ Supabase sign-out API failed:', apiError.message)
         
-        if (apiError instanceof NetworkError) {
+        if (apiError.message.includes('timeout')) {
+          setConnectionError('Sign-out request timed out, but local session cleared')
+        } else {
           setConnectionError(`Sign-out failed: ${apiError.message}`)
         }
       }
@@ -234,9 +266,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (error: any) {
       const duration = Date.now() - startTime
       console.error(`💥 Sign-out error after ${duration}ms:`, error)
-      supabaseErrorHandler.logError(error, 'signout-process')
       
-      // Emergency cleanup
+      // Emergency cleanup - still clear local state
       try {
         setUser(null)
         setSession(null)
@@ -255,7 +286,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setLastSignOutAttempt(failureRecord)
 
       return { 
-        success: true, // Consider successful since local state is cleared
+        success: true, // Still consider successful since local state is cleared
         error: `Error occurred but session was cleared: ${error.message}`,
         stage: 'error_recovery'
       }
@@ -266,17 +297,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const resetPassword = async (email: string) => {
     try {
+      console.log('🔄 Starting password reset...')
       setConnectionError(null)
+      
       const { error } = await supabase.auth.resetPasswordForEmail(email)
       
       if (error) {
-        supabaseErrorHandler.logError(error, 'reset-password')
+        console.error('Password reset error:', error)
+        return { error }
       }
       
-      return { error }
-    } catch (error) {
-      supabaseErrorHandler.logError(error, 'reset-password')
-      return { error: error as AuthError }
+      console.log('✅ Password reset email sent')
+      return { error: null }
+    } catch (error: any) {
+      console.error('Password reset failed:', error)
+      return { error: new SupabaseError(error.message, 'RESET_PASSWORD_ERROR') }
     }
   }
 
@@ -284,22 +319,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!user) return { error: 'No user logged in' }
 
     try {
+      console.log('👤 Updating user profile...')
       setConnectionError(null)
-      const { error } = await supabase
-        .from('profiles')
-        .update(updates)
-        .eq('id', user.id)
+      
+      const { data, error } = await database.updateProfile(user.id, updates)
 
-      if (!error) {
-        setProfile(prev => prev ? { ...prev, ...updates } : null)
-      } else {
-        supabaseErrorHandler.logError(error, 'update-profile')
+      if (error) {
+        console.error('Profile update error:', error)
+        return { error }
       }
 
-      return { error }
-    } catch (error) {
-      supabaseErrorHandler.logError(error, 'update-profile')
-      return { error }
+      console.log('✅ Profile updated successfully')
+      setProfile(data)
+      return { error: null }
+    } catch (error: any) {
+      console.error('Profile update failed:', error)
+      return { error: new SupabaseError(error.message, 'UPDATE_PROFILE_ERROR') }
     }
   }
 

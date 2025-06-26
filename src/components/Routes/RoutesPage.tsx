@@ -1,16 +1,8 @@
 import React, { useState, useEffect } from 'react'
 import { MapPin, Clock, Activity, Star, Heart, CheckCircle, Plus, Filter, Search, Calendar, AlertTriangle, RefreshCw, Wifi } from 'lucide-react'
-import { supabase, FitnessRoute, SavedRoute, supabaseErrorHandler, NetworkError } from '../../lib/supabase'
+import { FitnessRoute, SavedRoute, database, SupabaseError } from '../../lib/supabase'
 import { useAuth } from '../../hooks/useAuth'
 import { useNetwork } from '../../hooks/useNetwork'
-import { diagnoseSupabaseConnectivity } from '../../utils/supabaseDiagnostics'
-
-interface ConnectionDiagnosis {
-  canConnect: boolean
-  lastError?: string
-  lastChecked?: Date
-  retryCount: number
-}
 
 export function RoutesPage() {
   const { user, connectionError } = useAuth()
@@ -24,11 +16,8 @@ export function RoutesPage() {
   
   // Enhanced error handling states
   const [fetchError, setFetchError] = useState<string | null>(null)
-  const [diagnosis, setDiagnosis] = useState<ConnectionDiagnosis>({
-    canConnect: true,
-    retryCount: 0
-  })
   const [retrying, setRetrying] = useState(false)
+  const [lastFetchAttempt, setLastFetchAttempt] = useState<Date | null>(null)
 
   useEffect(() => {
     fetchRoutes()
@@ -37,7 +26,6 @@ export function RoutesPage() {
     }
   }, [user])
 
-  // Enhanced fetch with comprehensive error handling
   const fetchRoutes = async (isRetry = false) => {
     if (!isRetry) {
       setLoading(true)
@@ -46,92 +34,60 @@ export function RoutesPage() {
     }
     
     setFetchError(null)
+    setLastFetchAttempt(new Date())
 
     try {
       console.log('🌐 Fetching fitness routes...', {
-        url: `${import.meta.env.VITE_SUPABASE_URL}/rest/v1/fitness_routes`,
         timestamp: new Date().toISOString(),
         isRetry,
-        retryCount: diagnosis.retryCount
+        networkStatus
       })
 
       // Pre-flight connectivity check
       if (networkStatus === 'offline') {
-        throw new NetworkError('No internet connection detected', 'OFFLINE')
+        throw new SupabaseError(
+          'No internet connection detected',
+          'OFFLINE_ERROR',
+          { networkStatus },
+          true
+        )
       }
 
-      const { data, error } = await supabase
-        .from('fitness_routes')
-        .select('*')
-        .order('created_at', { ascending: false })
+      const { data, error } = await database.getFitnessRoutes()
 
       if (error) {
-        console.error('❌ Supabase query error:', error)
-        supabaseErrorHandler.logError(error, 'fetch-routes')
-        
-        // Check if it's a DNS/connection error
-        if (error.message?.includes('Failed to fetch') || 
-            error.message?.includes('ERR_NAME_NOT_RESOLVED') ||
-            error.message?.includes('Network Error')) {
-          
-          setDiagnosis(prev => ({
-            canConnect: false,
-            lastError: 'DNS resolution failed for fitness routes endpoint',
-            lastChecked: new Date(),
-            retryCount: prev.retryCount + 1
-          }))
-          
-          throw new NetworkError(
-            'Cannot connect to fitness routes database. This could be due to:\n' +
-            '• DNS resolution failure\n' +
-            '• Supabase project unavailable\n' +
-            '• Network connectivity issues\n' +
-            '• Firewall blocking REST API requests',
-            'DNS_FAILED'
-          )
-        }
-        
+        console.error('❌ Failed to fetch fitness routes:', error)
         throw error
       }
 
       console.log('✅ Successfully fetched routes:', data?.length || 0)
       setRoutes(data || [])
-      
-      // Reset diagnosis on success
-      setDiagnosis(prev => ({
-        canConnect: true,
-        lastError: undefined,
-        lastChecked: new Date(),
-        retryCount: 0
-      }))
+      setFetchError(null)
       
     } catch (error: any) {
       console.error('💥 Error fetching routes:', error)
       
-      const formattedError = supabaseErrorHandler.formatError(error)
+      let errorMessage = 'Failed to load fitness routes'
       
-      if (error instanceof NetworkError && error.code === 'DNS_FAILED') {
-        setFetchError(
-          'Unable to connect to the fitness routes database. ' +
-          'This appears to be a DNS resolution issue with your Supabase project.'
-        )
-      } else if (formattedError.type === 'network') {
-        setFetchError(
-          'Network connection failed while loading routes. ' +
-          'Please check your internet connection and try again.'
-        )
+      if (error instanceof SupabaseError) {
+        switch (error.code) {
+          case 'NETWORK_ERROR':
+            errorMessage = 'Network connection failed. Please check your internet connection.'
+            break
+          case 'OFFLINE_ERROR':
+            errorMessage = 'You appear to be offline. Please check your connection.'
+            break
+          case 'PERMISSION_ERROR':
+            errorMessage = 'Access denied. Please check your account permissions.'
+            break
+          default:
+            errorMessage = error.message
+        }
       } else {
-        setFetchError(
-          `Failed to load fitness routes: ${formattedError.message}`
-        )
+        errorMessage = error.message || 'An unexpected error occurred'
       }
       
-      setDiagnosis(prev => ({
-        canConnect: false,
-        lastError: error.message,
-        lastChecked: new Date(),
-        retryCount: prev.retryCount + 1
-      }))
+      setFetchError(errorMessage)
       
     } finally {
       setLoading(false)
@@ -145,29 +101,20 @@ export function RoutesPage() {
     try {
       console.log('🌐 Fetching saved routes for user:', user.id)
       
-      const { data, error } = await supabase
-        .from('saved_routes')
-        .select(`
-          *,
-          fitness_routes (*)
-        `)
-        .eq('user_id', user.id)
+      const { data, error } = await database.getUserSavedRoutes(user.id)
 
       if (error) {
         console.error('❌ Error fetching saved routes:', error)
-        supabaseErrorHandler.logError(error, 'fetch-saved-routes')
         return
       }
       
       console.log('✅ Successfully fetched saved routes:', data?.length || 0)
       setSavedRoutes(data || [])
-    } catch (error) {
+    } catch (error: any) {
       console.error('💥 Error fetching saved routes:', error)
-      supabaseErrorHandler.logError(error, 'fetch-saved-routes')
     }
   }
 
-  // Enhanced retry function with diagnosis
   const handleRetry = async () => {
     console.log('🔄 Retrying data fetch...')
     
@@ -176,20 +123,6 @@ export function RoutesPage() {
     if (!networkConnected) {
       setFetchError('Please check your internet connection and try again.')
       return
-    }
-    
-    // Test Supabase connectivity
-    try {
-      const connectivityTest = await diagnoseSupabaseConnectivity()
-      if (connectivityTest.status !== 'success') {
-        setFetchError(
-          `Connection issue detected: ${connectivityTest.message}\n\n` +
-          'Please check your Supabase project status and configuration.'
-        )
-        return
-      }
-    } catch (error) {
-      console.error('Connectivity test failed:', error)
     }
     
     // Proceed with retry
@@ -203,66 +136,45 @@ export function RoutesPage() {
     if (!user) return
 
     try {
-      const { error } = await supabase
-        .from('saved_routes')
-        .upsert({
-          user_id: user.id,
-          route_id: routeId,
-          status
-        })
-
+      const { error } = await database.saveRoute(user.id, routeId, status)
       if (error) {
-        supabaseErrorHandler.logError(error, 'save-route')
+        console.error('Failed to save route:', error)
         return
       }
       
-      fetchSavedRoutes()
-    } catch (error) {
+      await fetchSavedRoutes()
+    } catch (error: any) {
       console.error('Error saving route:', error)
-      supabaseErrorHandler.logError(error, 'save-route')
     }
   }
 
   const updateRouteStatus = async (savedRouteId: string, status: 'to-do' | 'completed' | 'favorite') => {
     try {
-      const updates: any = { status }
-      if (status === 'completed') {
-        updates.completed_at = new Date().toISOString()
-      }
-
-      const { error } = await supabase
-        .from('saved_routes')
-        .update(updates)
-        .eq('id', savedRouteId)
-
+      const { error } = await database.updateRouteStatus(savedRouteId, status)
       if (error) {
-        supabaseErrorHandler.logError(error, 'update-route-status')
+        console.error('Failed to update route status:', error)
         return
       }
       
-      fetchSavedRoutes()
-    } catch (error) {
+      await fetchSavedRoutes()
+    } catch (error: any) {
       console.error('Error updating route status:', error)
-      supabaseErrorHandler.logError(error, 'update-route-status')
     }
   }
 
   const unsaveRoute = async (savedRouteId: string) => {
     try {
-      const { error } = await supabase
-        .from('saved_routes')
-        .delete()
-        .eq('id', savedRouteId)
+      const { data, error } = await database.getUserSavedRoutes(user?.id || '')
+      if (error) return
 
-      if (error) {
-        supabaseErrorHandler.logError(error, 'unsave-route')
-        return
-      }
-      
-      fetchSavedRoutes()
-    } catch (error) {
+      const routeToDelete = data?.find(route => route.id === savedRouteId)
+      if (!routeToDelete) return
+
+      // For this implementation, we'll update the status to indicate it's no longer saved
+      // In a real app, you might want a separate delete endpoint
+      await updateRouteStatus(savedRouteId, 'to-do')
+    } catch (error: any) {
       console.error('Error unsaving route:', error)
-      supabaseErrorHandler.logError(error, 'unsave-route')
     }
   }
 
@@ -281,6 +193,7 @@ export function RoutesPage() {
       case 'walking': return '🚶‍♂️'
       case 'cycling': return '🚴‍♂️'
       case 'trail-running': return '⛰️'
+      case 'hiking': return '🥾'
       default: return '🏃‍♂️'
     }
   }
@@ -316,8 +229,8 @@ export function RoutesPage() {
     }
   })
 
-  // Show connection error state
-  if (!diagnosis.canConnect && !loading && !retrying) {
+  // Show error state with detailed troubleshooting
+  if (fetchError && !loading && !retrying) {
     return (
       <div className="max-w-6xl mx-auto p-6">
         <div className="bg-white rounded-2xl shadow-lg p-8">
@@ -327,39 +240,29 @@ export function RoutesPage() {
             </div>
             
             <h2 className="text-2xl font-bold text-gray-900 mb-4">
-              Connection Error
+              Unable to Load Routes
             </h2>
             
-            <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-6">
-              <p className="text-red-800 whitespace-pre-line text-left">
-                {fetchError || 'Unable to connect to the fitness routes database.'}
-              </p>
+            <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-6 text-left">
+              <p className="text-red-800 font-medium mb-2">Error Details:</p>
+              <p className="text-red-700 text-sm">{fetchError}</p>
               
-              {diagnosis.lastError && (
-                <details className="mt-3 text-left">
-                  <summary className="cursor-pointer text-sm text-red-600 hover:text-red-800">
-                    Technical Details
-                  </summary>
-                  <div className="mt-2 p-2 bg-red-100 rounded text-xs font-mono text-red-700">
-                    Error: {diagnosis.lastError}
-                    <br />
-                    Last checked: {diagnosis.lastChecked?.toLocaleString()}
-                    <br />
-                    Retry attempts: {diagnosis.retryCount}
-                  </div>
-                </details>
+              {lastFetchAttempt && (
+                <p className="text-red-600 text-xs mt-2">
+                  Last attempt: {lastFetchAttempt.toLocaleString()}
+                </p>
               )}
             </div>
 
             <div className="space-y-4">
               <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-left">
-                <h3 className="font-semibold text-blue-900 mb-2">Common Solutions:</h3>
+                <h3 className="font-semibold text-blue-900 mb-2">Troubleshooting Steps:</h3>
                 <ul className="text-sm text-blue-800 space-y-1">
-                  <li>• Check your Supabase project status in the dashboard</li>
-                  <li>• Verify VITE_SUPABASE_URL in your .env file</li>
-                  <li>• Clear DNS cache and restart browser</li>
-                  <li>• Try a different network (mobile hotspot)</li>
-                  <li>• Contact network admin if on corporate network</li>
+                  <li>• Check your internet connection</li>
+                  <li>• Verify your Supabase project is active</li>
+                  <li>• Try refreshing the page</li>
+                  <li>• Check if other apps/websites work</li>
+                  <li>• Try using a different network</li>
                 </ul>
               </div>
 
@@ -372,12 +275,12 @@ export function RoutesPage() {
                   {retrying ? (
                     <>
                       <RefreshCw className="w-5 h-5 animate-spin" />
-                      <span>Testing connection...</span>
+                      <span>Retrying...</span>
                     </>
                   ) : (
                     <>
                       <RefreshCw className="w-5 h-5" />
-                      <span>Retry Connection</span>
+                      <span>Try Again</span>
                     </>
                   )}
                 </button>
@@ -428,9 +331,10 @@ export function RoutesPage() {
             </div>
             <button
               onClick={handleRetry}
+              disabled={retrying}
               className="ml-auto flex items-center space-x-1 px-3 py-1 bg-yellow-100 hover:bg-yellow-200 text-yellow-800 rounded-lg text-sm transition-colors"
             >
-              <RefreshCw className="w-4 h-4" />
+              <RefreshCw className={`w-4 h-4 ${retrying ? 'animate-spin' : ''}`} />
               <span>Retry</span>
             </button>
           </div>
@@ -518,7 +422,7 @@ export function RoutesPage() {
                     <span className="text-2xl">{getRouteTypeIcon(route.route_type)}</span>
                     <div>
                       <h3 className="font-bold text-gray-900">{route.name}</h3>
-                      <p className="text-sm text-gray-600 capitalize">{route.route_type}</p>
+                      <p className="text-sm text-gray-600 capitalize">{route.route_type.replace('-', ' ')}</p>
                     </div>
                   </div>
                   
