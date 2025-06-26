@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { NetworkMonitor } from '../lib/supabase'
+import { SupabaseHealthMonitor } from '../lib/supabase'
 
 export function useNetwork() {
   const [isOnline, setIsOnline] = useState(navigator.onLine)
@@ -7,7 +7,7 @@ export function useNetwork() {
   const [lastChecked, setLastChecked] = useState<Date | null>(null)
 
   useEffect(() => {
-    const monitor = NetworkMonitor.getInstance()
+    const monitor = SupabaseHealthMonitor.getInstance()
     
     // Listen to network status changes
     const removeListener = monitor.addListener((online) => {
@@ -28,8 +28,8 @@ export function useNetwork() {
 
   const testConnectivity = async () => {
     try {
-      const monitor = NetworkMonitor.getInstance()
-      const connected = await monitor.testConnectivity()
+      const monitor = SupabaseHealthMonitor.getInstance()
+      const connected = await monitor.checkHealth()
       setIsConnected(connected)
       setLastChecked(new Date())
       return connected
