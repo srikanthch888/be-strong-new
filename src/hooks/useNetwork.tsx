@@ -8,9 +8,10 @@ export function useNetwork() {
 
   useEffect(() => {
     const monitor = SupabaseHealthMonitor.getInstance()
-    
-    // Listen to network status changes
-    const removeListener = monitor.addListener((online) => {
+
+    // Listen to health status changes
+    const removeListener = monitor.addHealthListener((status) => {
+      const online = status !== 'down'
       setIsOnline(online)
       if (online) {
         // Test actual connectivity when coming back online
